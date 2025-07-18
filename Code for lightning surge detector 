@@ -1,0 +1,139 @@
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include <RTClib.h>
+#include <SPI.h>
+#include <SD.h>
+
+// Pin configuration
+const int surgePin = 2;
+const int buzzerPin = 6;
+const int ledPin = 7;
+const int resetButtonPin = 8; // New reset button pin
+const int chipSelect = 10;
+
+// Modules
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+RTC_DS3231 rtc;
+File logFile;
+
+// Variables
+volatile unsigned int surgeCount = 0;
+unsigned long lastSurgeTime = 0;
+const unsigned long debounceDelay = 1000;
+
+void setup() {
+  // I/O setup
+  pinMode(surgePin, INPUT);
+  pinMode(buzzerPin, OUTPUT);
+  pinMode(ledPin, OUTPUT);
+  pinMode(resetButtonPin, INPUT_PULLUP); // Reset button with internal pull-up
+  digitalWrite(buzzerPin, LOW);
+  digitalWrite(ledPin, LOW);
+
+  // LCD setup
+  lcd.init();
+  lcd.backlight();
+  lcd.setCursor(0, 0);
+  lcd.print("Initializing...");
+
+  // RTC setup
+  if (!rtc.begin()) {
+    lcd.setCursor(0, 1);
+    lcd.print("RTC not found!");
+    while (1);
+  }
+
+  // SD card setup
+  if (!SD.begin(chipSelect)) {
+    lcd.setCursor(0, 1);
+    lcd.print("SD init failed!");
+    while (1);
+  }
+
+  // Check if CSV file exists, if not create header
+  if (!SD.exists("surge_log.csv")) {
+    logFile = SD.open("surge_log.csv", FILE_WRITE);
+    if (logFile) {
+      logFile.println("Surge No,Date,Time");
+      logFile.close();
+    }
+  }
+
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("System Ready");
+
+  // Attach interrupt
+  attachInterrupt(digitalPinToInterrupt(surgePin), surgeDetected, FALLING);
+}
+
+void loop() {
+  lcd.setCursor(0, 0);
+  lcd.print("Surges: ");
+  lcd.print(surgeCount);
+  lcd.print("     ");
+
+  // Check for reset button press
+  if (digitalRead(resetButtonPin) == LOW) {
+    surgeCount = 0;
+    lcd.setCursor(0, 1);
+    lcd.print("Counter Reset   ");
+    delay(1000);
+  }
+
+  delay(1000);
+}
+
+void surgeDetected() {
+  unsigned long currentTime = millis();
+
+  if (currentTime - lastSurgeTime > debounceDelay) {
+    surgeCount++;
+    lastSurgeTime = currentTime;
+
+    DateTime now = rtc.now();
+
+    // Format timestamp for LCD
+    lcd.setCursor(0, 1);
+    lcd.print("Last: ");
+    lcd.print(now.hour());
+    lcd.print(":");
+    if (now.minute() < 10) lcd.print("0");
+    lcd.print(now.minute());
+    lcd.print(":");
+    if (now.second() < 10) lcd.print("0");
+    lcd.print(now.second());
+    lcd.print("   ");
+
+    // Log to SD in CSV format
+    logFile = SD.open("surge_log.csv", FILE_WRITE);
+    if (logFile) {
+      logFile.print(surgeCount);
+      logFile.print(",");
+      logFile.print(now.day());
+      logFile.print("/");
+      logFile.print(now.month());
+      logFile.print("/");
+      logFile.print(now.year());
+      logFile.print(",");
+      if (now.hour() < 10) logFile.print("0");
+      logFile.print(now.hour());
+      logFile.print(":");
+      if (now.minute() < 10) logFile.print("0");
+      logFile.print(now.minute());
+      logFile.print(":");
+      if (now.second() < 10) logFile.print("0");
+      logFile.println(now.second());
+      logFile.close();
+    }
+
+    // Feedback: Turn LED and buzzer ON for 6 seconds
+    digitalWrite(ledPin, HIGH);
+    digitalWrite(buzzerPin, HIGH);
+    delay(6000);  // 6 seconds
+    digitalWrite(ledPin, LOW);
+    digitalWrite(buzzerPin, LOW);
+  }
+}
+
+
